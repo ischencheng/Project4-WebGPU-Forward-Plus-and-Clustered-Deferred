@@ -3,7 +3,8 @@ import { toRadians } from "../math_util";
 import { device, canvas, fovYDegrees, aspectRatio } from "../renderer";
 
 class CameraUniforms {
-    readonly buffer = new ArrayBuffer(16 * 4);
+    // viewProjMat, viewMat, screenSize, tanHalfFov
+    readonly buffer = new ArrayBuffer((16 + 16 + 2 + 2) * 4);
     private readonly floatView = new Float32Array(this.buffer);
 
     set viewProjMat(mat: Float32Array) {
@@ -12,6 +13,17 @@ class CameraUniforms {
     }
 
     // TODO-2: add extra functions to set values needed for light clustering here
+    set viewMat(mat: Float32Array) {
+        this.floatView.set(mat, 16);
+    }
+
+    set screenSize(size: [number, number]) {
+        this.floatView.set(size, 32);
+    }
+
+    set tanHalfFov(t: [number, number]) {
+        this.floatView.set(t, 34);
+    }
 }
 
 export class Camera {
@@ -46,6 +58,9 @@ export class Camera {
         });
 
         this.projMat = mat4.perspective(toRadians(fovYDegrees), aspectRatio, Camera.nearPlane, Camera.farPlane);
+        const tanHalfFovY = Math.tan(toRadians(fovYDegrees) / 2);
+        this.uniforms.screenSize = [canvas.width, canvas.height];
+        this.uniforms.tanHalfFov = [tanHalfFovY * aspectRatio, tanHalfFovY];
 
         this.rotateCamera(0, 0); // set initial camera vectors
 
@@ -138,6 +153,7 @@ export class Camera {
         this.uniforms.viewProjMat = viewProjMat;
 
         // TODO-2: write to extra buffers needed for light clustering here
+        this.uniforms.viewMat = viewMat;
 
         // TODO-1.1: upload `this.uniforms.buffer` (host side) to `this.uniformsBuffer` (device side)
         // check `lights.ts` for examples of using `device.queue.writeBuffer()`

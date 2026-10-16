@@ -30,7 +30,15 @@ export const constants = {
 
     moveLightsWorkgroupSize: 128,
 
-    lightRadius: 2
+    lightRadius: 2,
+
+    clusterX: 32,
+    clusterY: 18,
+    clusterZ: 32,
+    clusterNear: 1, // slice 0 covers everything closer than this
+    clusterFar: 50, // the whole sponza scene fits in this depth
+    maxLightsPerCluster: 1023,
+    clusteringWorkgroupSize: 64
 };
 
 // =================================
