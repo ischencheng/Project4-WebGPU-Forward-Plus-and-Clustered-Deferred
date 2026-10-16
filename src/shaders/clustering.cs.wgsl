@@ -26,13 +26,15 @@
 
 //     - Store the number of lights assigned to this cluster.
 
+// view space positions of the lights this workgroup is testing right now
+var<workgroup> tileLights: array<vec3f, ${clusteringWorkgroupSize}>;
+
 @compute
 @workgroup_size(${clusteringWorkgroupSize})
-fn main(@builtin(global_invocation_id) globalIdx: vec3u) {
+fn main(@builtin(global_invocation_id) globalIdx: vec3u, @builtin(local_invocation_index) localIdx: u32) {
     let clusterIdx = globalIdx.x;
-    if (clusterIdx >= ${clusterX} * ${clusterY} * ${clusterZ}) {
-        return;
-    }
+    // no early return, every thread has to help load the lights
+    let valid = clusterIdx < ${clusterX} * ${clusterY} * ${clusterZ};
 
     let x = clusterIdx % ${clusterX};
     let y = (clusterIdx / ${clusterX}) % ${clusterY};
@@ -51,17 +53,25 @@ fn main(@builtin(global_invocation_id) globalIdx: vec3u) {
 
     let cluster = &clusterSet.clusters[clusterIdx];
     var count = 0u;
-    for (var lightIdx = 0u; lightIdx < lightSet.numLights; lightIdx++) {
-        let lightPos = (camera.viewMat * vec4f(lightSet.lights[lightIdx].pos, 1.f)).xyz;
-        // closest point of the box to the light
-        let d = clamp(lightPos, aabbMin, aabbMax) - lightPos;
-        if (dot(d, d) <= ${lightRadius} * ${lightRadius}) {
-            (*cluster).lightIndices[count] = lightIdx;
-            count++;
-            if (count == ${maxLightsPerCluster}) {
-                break;
+    for (var base = 0u; base < lightSet.numLights; base += ${clusteringWorkgroupSize}) {
+        // each thread moves one light to view space
+        if (base + localIdx < lightSet.numLights) {
+            tileLights[localIdx] = (camera.viewMat * vec4f(lightSet.lights[base + localIdx].pos, 1.f)).xyz;
+        }
+        workgroupBarrier();
+
+        let n = min(${clusteringWorkgroupSize}u, lightSet.numLights - base);
+        for (var j = 0u; j < n; j++) {
+            // closest point of the box to the light
+            let d = clamp(tileLights[j], aabbMin, aabbMax) - tileLights[j];
+            if (valid && count < ${maxLightsPerCluster} && dot(d, d) <= ${lightRadius} * ${lightRadius}) {
+                (*cluster).lightIndices[count] = base + j;
+                count++;
             }
         }
+        workgroupBarrier();
     }
-    (*cluster).numLights = count;
+    if (valid) {
+        (*cluster).numLights = count;
+    }
 }
