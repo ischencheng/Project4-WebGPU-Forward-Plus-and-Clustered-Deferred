@@ -10,8 +10,7 @@ import naiveFragRaw from './naive.fs.wgsl?raw';
 import forwardPlusFragRaw from './forward_plus.fs.wgsl?raw';
 
 import clusteredDeferredFragRaw from './clustered_deferred.fs.wgsl?raw';
-import clusteredDeferredFullscreenVertRaw from './clustered_deferred_fullscreen.vs.wgsl?raw';
-import clusteredDeferredFullscreenFragRaw from './clustered_deferred_fullscreen.fs.wgsl?raw';
+import clusteredDeferredShadingComputeRaw from './clustered_deferred_shading.cs.wgsl?raw';
 
 import moveLightsComputeRaw from './move_lights.cs.wgsl?raw';
 import clusteringComputeRaw from './clustering.cs.wgsl?raw';
@@ -38,7 +37,9 @@ export const constants = {
     clusterNear: 1, // slice 0 covers everything closer than this
     clusterFar: 50, // the whole sponza scene fits in this depth
     maxLightsPerCluster: 1023,
-    clusteringWorkgroupSize: 64
+    clusteringWorkgroupSize: 64,
+
+    shadingTileSize: 8
 };
 
 // =================================
@@ -60,8 +61,7 @@ export const naiveFragSrc: string = processShaderRaw(naiveFragRaw);
 export const forwardPlusFragSrc: string = processShaderRaw(forwardPlusFragRaw);
 
 export const clusteredDeferredFragSrc: string = processShaderRaw(clusteredDeferredFragRaw);
-export const clusteredDeferredFullscreenVertSrc: string = processShaderRaw(clusteredDeferredFullscreenVertRaw);
-export const clusteredDeferredFullscreenFragSrc: string = processShaderRaw(clusteredDeferredFullscreenFragRaw);
+export const clusteredDeferredShadingComputeSrc: string = processShaderRaw(clusteredDeferredShadingComputeRaw);
 
 export const moveLightsComputeSrc: string = processShaderRaw(moveLightsComputeRaw);
 export const clusteringComputeSrc: string = processShaderRaw(clusteringComputeRaw);

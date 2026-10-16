@@ -25,7 +25,8 @@ struct CameraUniforms {
     viewProjMat: mat4x4f,
     viewMat: mat4x4f,
     screenSize: vec2f,
-    tanHalfFov: vec2f // x already has the aspect ratio in it
+    tanHalfFov: vec2f, // x already has the aspect ratio in it
+    invViewProjMat: mat4x4f
 }
 
 // depth of the near side of slice k
@@ -45,6 +46,24 @@ fn clusterIndex(fragCoord: vec2f, viewDepth: f32, screenSize: vec2f) -> u32 {
     let zf = log(viewDepth / ${clusterNear}) / log(${clusterFar} / ${clusterNear}) * (${clusterZ} - 1) + 1;
     let z = u32(clamp(zf, 0.f, ${clusterZ} - 1.f));
     return x + y * ${clusterX} + z * ${clusterX} * ${clusterY};
+}
+
+// octahedron normal encoding, a unit vector becomes a point in [-1, 1]^2
+fn octEncode(n: vec3f) -> vec2f {
+    let p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+    if (n.z >= 0.f) {
+        return p;
+    }
+    // fold the lower half over the diagonals
+    return (1.f - abs(p.yx)) * select(vec2f(-1.f), vec2f(1.f), p >= vec2f(0.f));
+}
+
+fn octDecode(e: vec2f) -> vec3f {
+    var n = vec3f(e, 1.f - abs(e.x) - abs(e.y));
+    let t = max(-n.z, 0.f);
+    n.x += select(t, -t, n.x >= 0.f);
+    n.y += select(t, -t, n.y >= 0.f);
+    return normalize(n);
 }
 
 // CHECKITOUT: this special attenuation function ensures lights don't affect geometry outside the maximum light radius

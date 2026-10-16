@@ -3,8 +3,8 @@ import { toRadians } from "../math_util";
 import { device, canvas, fovYDegrees, aspectRatio } from "../renderer";
 
 class CameraUniforms {
-    // viewProjMat, viewMat, screenSize, tanHalfFov
-    readonly buffer = new ArrayBuffer((16 + 16 + 2 + 2) * 4);
+    // viewProjMat, viewMat, screenSize, tanHalfFov, invViewProjMat
+    readonly buffer = new ArrayBuffer((16 + 16 + 2 + 2 + 16) * 4);
     private readonly floatView = new Float32Array(this.buffer);
 
     set viewProjMat(mat: Float32Array) {
@@ -23,6 +23,10 @@ class CameraUniforms {
 
     set tanHalfFov(t: [number, number]) {
         this.floatView.set(t, 34);
+    }
+
+    set invViewProjMat(mat: Float32Array) {
+        this.floatView.set(mat, 36);
     }
 }
 
@@ -154,6 +158,7 @@ export class Camera {
 
         // TODO-2: write to extra buffers needed for light clustering here
         this.uniforms.viewMat = viewMat;
+        this.uniforms.invViewProjMat = mat4.inverse(viewProjMat);
 
         // TODO-1.1: upload `this.uniforms.buffer` (host side) to `this.uniformsBuffer` (device side)
         // check `lights.ts` for examples of using `device.queue.writeBuffer()`

@@ -12,24 +12,17 @@ struct FragmentInput
     @location(2) uv: vec2f
 }
 
-struct GBufferOutput
-{
-    @location(0) albedo: vec4f,
-    @location(1) normal: vec4f,
-    @location(2) position: vec4f
-}
-
+// x: albedo as 4 x 8 bits, y: normal as 2 x 16 bits
+// the position comes back from the depth buffer
 @fragment
-fn main(in: FragmentInput) -> GBufferOutput
+fn main(in: FragmentInput) -> @location(0) vec2u
 {
     let diffuseColor = textureSample(diffuseTex, diffuseTexSampler, in.uv);
     if (diffuseColor.a < 0.5f) {
         discard;
     }
 
-    var out: GBufferOutput;
-    out.albedo = vec4f(diffuseColor.rgb, 1.f); // alpha 1 marks a covered pixel
-    out.normal = vec4f(normalize(in.nor), 0.f);
-    out.position = vec4f(in.pos, 1.f);
-    return out;
+    let albedo = pack4x8unorm(vec4f(diffuseColor.rgb, 1.f));
+    let normal = pack2x16snorm(octEncode(normalize(in.nor)));
+    return vec2u(albedo, normal);
 }
