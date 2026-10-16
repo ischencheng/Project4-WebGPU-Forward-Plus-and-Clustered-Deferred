@@ -49,6 +49,88 @@ This heat map shows how many lights the cluster of each pixel has with 5000 ligh
 
 The deferred renderer reuses the same clustering pass. First a G-buffer pass draws the scene and only writes the albedo (`rgba8unorm`), the normal and the world position (`rgba16float`) of the closest surface (above, from left to right). Then a fullscreen pass reads these three textures and does the same cluster lighting as Forward+. This way each pixel is lit exactly once, no matter how many surfaces were drawn on top of each other.
 
+### Performance Analysis
+
+I measured everything in Chrome at 1920 x 1080 with the default camera, which looks down the middle of the atrium. Chrome was started with `--disable-gpu-vsync --disable-frame-rate-limit`, so the frame rate is not capped at 60 fps. The frame time is the time between two frames finishing on the GPU (`device.queue.onSubmittedWorkDone()`), averaged over 120 frames (only 3 to 8 frames for naive, which is very slow), and the time of each pass comes from timestamp queries. I ran every setting 3 times and kept the middle one. The lights keep moving while I measure, so the numbers still change by about 5% between runs.
+
+This table shows the frame time (ms) for different numbers of lights:
+
+| Lights | Naive | Forward+ | Clustered Deferred |
+|---|---|---|---|
+| 500 | 140.9 | 7.4 | 5.0 |
+| 1000 | 281.5 | 15.1 | 6.0 |
+| 2000 | 563.4 | 21.8 | 9.4 |
+| 3000 | 845.5 | 40.0 | 14.5 |
+| 4000 | 1129.2 | 49.4 | 15.2 |
+| 5000 | 1409.8 | 57.7 | 17.0 |
+
+![lights](img/lights.png)
+
+Naive grows linearly with the number of lights, about 28 ms for every 100 lights, because every fragment loops over all of them. Both clustered renderers are 20 to 80 times faster, because a pixel only looks at the lights of its cluster.
+
+This table shows the time of each pass (ms):
+
+| Pass | Forward+ 1000 lights | Forward+ 5000 lights | Deferred 1000 lights | Deferred 5000 lights |
+|---|---|---|---|---|
+| light clustering | 0.41 | 2.38 | 0.36 | 2.38 |
+| G-buffer | | | 3.12 | 3.17 |
+| shading | 11.42 | 52.23 | 2.36 | 12.03 |
+
+### Forward+ vs. Clustered Deferred
+
+Compare your implementations of Forward+ and Clustered Deferred shading and analyze their differences.
+
+* **Is one of them faster?**
+  * Yes, Clustered Deferred is faster at every light count I tried: 1.5 times faster at 500 lights and 3.4 times faster at 5000 lights.
+
+* **Is one of them better at certain types of workloads?**
+  * Clustered Deferred is better when there are many lights and many surfaces on top of each other, like Sponza with its columns, curtains and plants. Forward+ does fine when there are few lights, because then shading is cheap and the extra G-buffer pass is not worth much: at 500 lights the gap is only 2.4 ms. Forward+ also suits scenes with transparent objects or many different materials better.
+
+* **What are the benefits and tradeoffs of using one over the other?**
+  * Deferred lights each pixel once, so its shading cost depends on the screen size and the lights per cluster, not on how many triangles cover a pixel. The tradeoff is memory and bandwidth: my G-buffer has 20 bytes per pixel (about 40 MB at 1080p) that is written and read again every frame, and every material has to fit into the same few values. It also keeps only the closest surface, so transparent objects and MSAA don't work with it directly. Forward+ needs no extra textures and each object can use any shader, but it also shades fragments that get hidden later.
+
+* **For any differences in performance, briefly explain what may be causing the difference.**
+  * The pass table shows the reason. Both renderers use the same clusters, but at 5000 lights Forward+ spends 52 ms in its shading pass and Deferred only 12 ms. Forward+ runs the light loop for every fragment that passes the depth test when it is drawn, even if a closer surface covers it later. From the 4 to 5 times longer shading pass I think each pixel is shaded about 4 times on average. Deferred runs the light loop once per pixel, after the G-buffer pass has already found the closest surface. The G-buffer pass costs about 3 ms, which is why the gap is small at 500 lights.
+
+The best case for both is many small lights, where each cluster only needs a few of them. The worst case is a few huge lights that touch every cluster: then each pixel still loops over all lights, and the clustering pass is extra work on top. The heat map above also matches the timing: the red pixels near the camera loop over many more lights than the blue ones at the end of the hall, and with more lights the red area grows.
+
+### Cluster Size
+
+I changed the number of clusters in three ways with 2000 lights (the cluster buffer here holds 511 lights per cluster, which is still enough at 2000 lights). This table shows the frame times (ms), the clustering pass (ms) and how many lights the cluster of a pixel has on average:
+
+| Clusters | Forward+ | Deferred | Clustering pass | Lights per cluster |
+|---|---|---|---|---|
+| 8 x 4 tiles, 32 slices | 37.6 | 11.6 | 0.17 | 163 |
+| 16 x 9 tiles, 32 slices | 28.3 | 9.8 | 0.19 | 121 |
+| 32 x 18 tiles, 32 slices | 25.1 | 9.6 | 0.69 | 101 |
+| 48 x 27 tiles, 32 slices | 24.8 | 10.3 | 1.47 | 85 |
+| 32 x 18 tiles, 8 slices | 53.5 | 15.0 | 0.23 | 222 |
+| 32 x 18 tiles, 16 slices | 32.6 | 10.9 | 0.31 | 139 |
+| 32 x 18 tiles, 48 slices | 22.9 | 9.4 | 0.98 | 86 |
+| first slice at 0.1 | 29.5 | 10.6 | 0.69 | 119 |
+| first slice at 3 | 27.7 | 10.7 | 0.59 | 124 |
+
+![clusters_sweep](img/clusters_sweep.png)
+
+Smaller clusters have fewer lights in them, so shading gets faster, but there are more clusters to fill, so the clustering pass gets slower and the buffer gets bigger. With 48 x 27 tiles the clustering pass takes 1.5 ms, which is more than Deferred saves in shading. The depth slices matter more than the tiles, because with only 8 slices the far slices are many units deep and a light anywhere in that depth range counts. 48 slices are a bit faster than 32, but with 1023 lights per cluster the buffer would be 113 MB, close to WebGPU's 128 MB limit for one storage buffer, so I kept 32 x 18 x 32.
+
+The first slice depth is the other setting I tuned. With plain log slices that start at the near plane (0.1), the first slices are tiny and empty, because nothing in Sponza is that close to the camera, and the other slices get thicker. Making slice 0 cover everything closer than 1 brought Forward+ from 29.5 ms to 25.1 ms and Deferred from 10.6 ms to 9.6 ms. Starting at 3 is worse again, because the walls next to the camera are about 2 to 3 units away and all of them fall into slice 0.
+
+### Optimization: Light Clustering in Shared Memory
+
+In my first clustering shader each thread looped over all lights by itself, so every thread read every light from the storage buffer and multiplied it by the view matrix. Now the 64 threads of a workgroup load 64 lights together: each thread reads one light, moves it to view space and puts it into workgroup (shared) memory, then after a barrier all threads test those 64 lights. This cuts the light reads and matrix multiplies by 64 times.
+
+This table shows the clustering pass (ms) before and after:
+
+| Lights | 500 | 1000 | 2000 | 3000 | 4000 | 5000 |
+|---|---|---|---|---|---|---|
+| one light at a time | 0.39 | 0.74 | 1.61 | 2.28 | 4.18 | 5.26 |
+| 64 lights in shared memory | 0.21 | 0.38 | 0.83 | 1.08 | 1.61 | 2.60 |
+
+![clustering_opt](img/clustering_opt.png)
+
+It is about 2 times faster, which saves 2.7 ms per frame at 5000 lights. It is not 64 times faster because the sphere-box test for each light and cluster is still the same amount of work. To make it faster I would cull the lights per screen tile first, or only fill the clusters that actually have visible geometry in them.
+
 ### Credits
 
 - [Vite](https://vitejs.dev/)
