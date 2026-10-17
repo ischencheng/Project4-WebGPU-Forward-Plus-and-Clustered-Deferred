@@ -23,7 +23,7 @@ This project renders the Sponza atrium lit by up to 5000 moving point lights in 
 * Forward+: a compute shader sorts the lights into clusters, and every fragment only loops over the lights of its cluster
 * Clustered Deferred: the same clusters, but the scene is drawn into a G-buffer first and then lit once per pixel
 
-For extra credit I made the G-buffer one packed texture with a compute lighting pass.
+For extra credit I made the G-buffer one packed texture with a compute lighting pass, and added a depth prepass to Forward+ that removes overdraw and only fills the clusters with visible geometry.
 
 ### Naive
 
@@ -33,7 +33,7 @@ The naive renderer draws the scene once and every fragment loops over all the li
 
 ![clusters](img/clusters.png)
 
-Forward+ cuts the view frustum into a 3D grid of clusters: 32 x 18 tiles on the screen, and 32 slices in depth. A compute shader (`clustering.cs.wgsl`) runs one thread per cluster. The thread builds the cluster's bounding box in view space, tests every light's sphere against the box, and writes the indices of the lights that touch it. In the fragment shader, each fragment finds its cluster from its pixel position and depth, and only loops over that cluster's lights. In the picture above I temporarily made the fragment shader output a color for each cluster index.
+Forward+ cuts the view frustum into a 3D grid of clusters: 32 x 18 tiles on the screen, and 32 slices in depth. A compute shader (`clustering.cs.wgsl`) runs one thread per cluster. The thread builds the cluster's bounding box in view space, tests every light's sphere against the box, and writes the indices of the lights that touch it. In the fragment shader, each fragment finds its cluster from its pixel position and depth, and only loops over that cluster's lights. In the picture above I temporarily made the fragment shader output a color for each cluster index. The depth prepass extra credit below makes Forward+ shade each pixel only once.
 
 The depth slices are spaced in log scale, so the near slices are thin and the far slices are thick. Slice 0 goes from the camera to depth 1, because almost nothing is that close to the camera. The other 31 slices go from 1 to 50 (the whole scene fits in 50), and slice $k$ starts at
 
@@ -155,6 +155,45 @@ This table shows the frame time (ms) before and after:
 The G-buffer pass got about 16% faster (3.1 ms to 2.6 ms), because it writes 8 bytes per pixel instead of 20. But my compute lighting pass is about 10% slower than the fullscreen fragment pass (11.9 ms to 13.0 ms at 5000 lights), so the frame time stayed about the same: a bit faster with few lights, a bit slower with many. I tried 4 x 4, 8 x 8 and 16 x 16 workgroups: 4 x 4 was twice as slow and the other two were the same. I am not sure why the compute pass is slower. I think the depth unprojection and the normal decode add a little work per pixel, and the fragment shader gets its pixels from the rasterizer in an order that the GPU is already tuned for.
 
 So the best case for this optimization is a high resolution with few lights, where reading and writing the G-buffer is a big part of the frame. The worst case is many lights, where the light loop is almost all of the time and the smaller G-buffer can't help it. The tradeoff is precision: albedo has 8 bits per channel (the same as the textures), the normal has 16 bits per component, and the position is only as exact as the depth buffer. Compared with the naive renderer, the biggest difference I found in a frame was 16 out of 255 on a few pixels. To make it faster I would let the 64 threads of a workgroup load their cluster's lights into shared memory together, because the pixels of an 8 x 8 tile mostly fall into the same cluster.
+
+### Extra Credit: Depth Prepass for Forward+
+
+I did the prepass and both optimizations. Forward+ now runs four steps every frame:
+
+1. Depth prepass: draw the scene into a `depth32float` buffer with a fragment shader that only does the alpha test.
+2. Mark clusters: a fullscreen-triangle pass reads the depth buffer, finds the cluster of each pixel and sets a flag for that cluster in a storage buffer.
+3. Light clustering: a compute shader packs the flagged clusters into a list with `atomicAdd` (stream compaction) and also writes the workgroup count for `dispatchWorkgroupsIndirect`. The clustering shader then only runs on the clusters in the list.
+4. Shading: the main pass keeps the depth buffer from step 1, with depth test `equal` and depth writes off, so only the closest fragment of each pixel runs the light loop.
+
+For `equal` to work, a fragment must get exactly the same depth in both passes, so the position output of the vertex shader is `@invariant`. Steps 2 and 4 also have to agree on the cluster of each pixel, otherwise a pixel could read a cluster that was never filled. So both compute the view depth from the depth value (`fragPos.z` in step 4), and the depth buffer is `depth32float`, which stores that value exactly.
+
+This table shows the frame time (ms):
+
+| Lights | 500 | 1000 | 2000 | 3000 | 4000 | 5000 |
+|---|---|---|---|---|---|---|
+| Forward+ without prepass | 7.4 | 14.6 | 21.7 | 40.1 | 49.5 | 58.2 |
+| prepass, all clusters filled | 4.9 | 6.5 | 12.4 | 14.5 | 20.3 | 22.3 |
+| prepass, empty clusters skipped | 4.9 | 6.4 | 12.2 | 14.3 | 20.6 | 22.4 |
+| prepass, stream compaction | 4.8 | 6.3 | 11.9 | 13.9 | 20.9 | 23.4 |
+| Clustered Deferred | 4.7 | 5.8 | 9.9 | 14.3 | 17.2 | 18.0 |
+
+![prepass](img/prepass.png)
+
+The overdraw-free shading is the big win. At 5000 lights the shading pass went from 52.0 ms to 17.8 ms, and the prepass itself only costs 2.7 ms, so Forward+ is now 2.5 times faster and almost as fast as Clustered Deferred. This makes sense, because now both of them run the light loop once per pixel. Deferred is still faster with many lights. I think this is because the Forward+ shading pass still sends all the triangles through the vertex shader again, and on triangle edges the fragment shader runs in 2 x 2 quads, so some light loops are wasted there.
+
+![active_clusters](img/active_clusters.png)
+
+For the cluster culling, I made a debug view that writes the cluster index of each pixel as a color and counted the different colors: only 1254 of the 18432 clusters (6.8%) have visible geometry in the default view. The chart above shows them per depth slice. Slices 0 to 4 and 24 to 31 are completely empty, because nothing is that close to the camera or that far away. This table shows the clustering pass (ms) for the three versions:
+
+| Clustering | 1000 lights | 5000 lights |
+|---|---|---|
+| all clusters | 0.35 | 1.94 |
+| empty clusters skipped | 0.24 | 1.33 |
+| stream compaction | 0.09 | 0.45 |
+
+Skipping empty clusters inside the full dispatch only saves about 30%. A workgroup has 64 clusters and still runs as long as one of them is active, and every thread still helps load the lights into shared memory. With stream compaction, only enough workgroups for the active clusters are launched, and the pass becomes 4 times faster than filling all clusters. So stream compaction is worth it for the clustering pass, but clustering is only a few percent of the frame, so the total frame time of the three versions is the same within the noise.
+
+The best case for the prepass is a scene with lots of overdraw and lots of lights, like Sponza at 5000 lights. The worst case is a scene where nothing overlaps on screen: then the prepass is 2 to 3 ms of extra geometry work for nothing. The saving grows with the number of lights, because each skipped fragment would have looped over more lights. The cluster culling helps more when more clusters are empty, for example when a wall is right in front of the camera. To make it faster I would also use the prepass depth to shrink each cluster's box to the depth range of its pixels, so fewer lights touch it.
 
 ### Credits
 
