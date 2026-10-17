@@ -23,6 +23,8 @@ This project renders the Sponza atrium lit by up to 5000 moving point lights in 
 * Forward+: a compute shader sorts the lights into clusters, and every fragment only loops over the lights of its cluster
 * Clustered Deferred: the same clusters, but the scene is drawn into a G-buffer first and then lit once per pixel
 
+For extra credit I made the G-buffer one packed texture with a compute lighting pass.
+
 ### Naive
 
 The naive renderer draws the scene once and every fragment loops over all the lights. I only had to give it the camera: the view-projection matrix goes into a uniform buffer in `camera.ts`, the buffer goes into the bind group in `naive.ts`, and `naive.vs.wgsl` multiplies each vertex by it. It is very slow with many lights, because every pixel checks every light, and pixels that are hidden behind other geometry later check them too.
@@ -47,11 +49,11 @@ This heat map shows how many lights the cluster of each pixel has with 5000 ligh
 
 ![gbuffer](img/gbuffer.png)
 
-The deferred renderer reuses the same clustering pass. First a G-buffer pass draws the scene and only writes the albedo (`rgba8unorm`), the normal and the world position (`rgba16float`) of the closest surface (above, from left to right). Then a fullscreen pass reads these three textures and does the same cluster lighting as Forward+. This way each pixel is lit exactly once, no matter how many surfaces were drawn on top of each other.
+The deferred renderer reuses the same clustering pass. First a G-buffer pass draws the scene and only writes the albedo (`rgba8unorm`), the normal and the world position (`rgba16float`) of the closest surface (above, from left to right). Then a fullscreen pass reads these three textures and does the same cluster lighting as Forward+. This way each pixel is lit exactly once, no matter how many surfaces were drawn on top of each other. The G-buffer extra credit below packs all of this into one texture.
 
 ### Performance Analysis
 
-I measured everything in Chrome at 1920 x 1080 with the default camera, which looks down the middle of the atrium. Chrome was started with `--disable-gpu-vsync --disable-frame-rate-limit`, so the frame rate is not capped at 60 fps. The frame time is the time between two frames finishing on the GPU (`device.queue.onSubmittedWorkDone()`), averaged over 120 frames (only 3 to 8 frames for naive, which is very slow), and the time of each pass comes from timestamp queries. I ran every setting 3 times and kept the middle one. The lights keep moving while I measure, so the numbers still change by about 5% between runs.
+I measured everything in Chrome at 1920 x 1080 with the default camera, which looks down the middle of the atrium. Chrome was started with `--disable-gpu-vsync --disable-frame-rate-limit`, so the frame rate is not capped at 60 fps. The frame time is the time between two frames finishing on the GPU (`device.queue.onSubmittedWorkDone()`), averaged over 120 frames (only 3 to 8 frames for naive, which is very slow), and the time of each pass comes from timestamp queries. I ran every setting 3 times and kept the middle one. The lights keep moving while I measure, so the numbers still change by about 5% between runs. The tables in this section are from the renderers without the extra credit, and the extra credit sections compare with them.
 
 This table shows the frame time (ms) for different numbers of lights:
 
@@ -130,6 +132,29 @@ This table shows the clustering pass (ms) before and after:
 ![clustering_opt](img/clustering_opt.png)
 
 It is about 2 times faster, which saves 2.7 ms per frame at 5000 lights. It is not 64 times faster because the sphere-box test for each light and cluster is still the same amount of work. To make it faster I would cull the lights per screen tile first, or only fill the clusters that actually have visible geometry in them.
+
+### Extra Credit: G-buffer Optimization
+
+I did both parts. The G-buffer is now one `rg32uint` texture with 8 bytes per pixel (it was 20 bytes in three textures), and the lighting pass is one compute shader instead of the fullscreen vertex + fragment pass.
+
+* Albedo: `pack4x8unorm` puts it into the first `u32`.
+* Normal: octahedron encoding projects the unit normal onto an octahedron and folds the lower half up, so it becomes two numbers in [-1, 1]. `pack2x16snorm` puts them into the second `u32`.
+* Position: not stored at all. The compute shader reads the depth buffer and multiplies the pixel's NDC position by the inverse view-projection matrix.
+
+The compute shader runs one thread per pixel in 8 x 8 workgroups and writes straight into the canvas texture as a storage texture. For this the canvas uses `rgba8unorm` with the `STORAGE_BINDING` usage, because the default `bgra8unorm` can't be a storage texture without an extra feature.
+
+This table shows the frame time (ms) before and after:
+
+| Lights | 500 | 1000 | 2000 | 3000 | 4000 | 5000 |
+|---|---|---|---|---|---|---|
+| 3 textures + fullscreen pass | 5.0 | 6.1 | 9.8 | 13.6 | 16.6 | 17.2 |
+| 1 packed texture + compute pass | 4.7 | 5.8 | 9.6 | 14.5 | 16.7 | 17.7 |
+
+![gbuffer_perf](img/gbuffer_perf.png)
+
+The G-buffer pass got about 16% faster (3.1 ms to 2.6 ms), because it writes 8 bytes per pixel instead of 20. But my compute lighting pass is about 10% slower than the fullscreen fragment pass (11.9 ms to 13.0 ms at 5000 lights), so the frame time stayed about the same: a bit faster with few lights, a bit slower with many. I tried 4 x 4, 8 x 8 and 16 x 16 workgroups: 4 x 4 was twice as slow and the other two were the same. I am not sure why the compute pass is slower. I think the depth unprojection and the normal decode add a little work per pixel, and the fragment shader gets its pixels from the rasterizer in an order that the GPU is already tuned for.
+
+So the best case for this optimization is a high resolution with few lights, where reading and writing the G-buffer is a big part of the frame. The worst case is many lights, where the light loop is almost all of the time and the smaller G-buffer can't help it. The tradeoff is precision: albedo has 8 bits per channel (the same as the textures), the normal has 16 bits per component, and the position is only as exact as the depth buffer. Compared with the naive renderer, the biggest difference I found in a frame was 16 out of 255 on a few pixels. To make it faster I would let the 64 threads of a workgroup load their cluster's lights into shared memory together, because the pixels of an 8 x 8 tile mostly fall into the same cluster.
 
 ### Credits
 
