@@ -15,7 +15,7 @@ struct VertexInput
 
 struct VertexOutput
 {
-    @builtin(position) fragPos: vec4f,
+    @builtin(position) @invariant fragPos: vec4f, // same depth in every pipeline, for the depth prepass
     @location(0) pos: vec3f,
     @location(1) nor: vec3f,
     @location(2) uv: vec2f

@@ -38,7 +38,8 @@ fn main(in: FragmentInput) -> @location(0) vec4f
         discard;
     }
 
-    let viewDepth = -(camera.viewMat * vec4f(in.pos, 1.f)).z;
+    // same depth value as the cluster marking pass, so both find the same cluster
+    let viewDepth = viewDepthFromDepth(in.fragPos.z);
     let cluster = &clusterSet.clusters[clusterIndex(in.fragPos.xy, viewDepth, camera.screenSize)];
     let nor = normalize(in.nor);
 

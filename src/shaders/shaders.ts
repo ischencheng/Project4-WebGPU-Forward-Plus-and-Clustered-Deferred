@@ -8,6 +8,10 @@ import naiveVertRaw from './naive.vs.wgsl?raw';
 import naiveFragRaw from './naive.fs.wgsl?raw';
 
 import forwardPlusFragRaw from './forward_plus.fs.wgsl?raw';
+import depthPrepassFragRaw from './depth_prepass.fs.wgsl?raw';
+import fullscreenVertRaw from './fullscreen.vs.wgsl?raw';
+import markClustersFragRaw from './mark_clusters.fs.wgsl?raw';
+import compactClustersComputeRaw from './compact_clusters.cs.wgsl?raw';
 
 import clusteredDeferredFragRaw from './clustered_deferred.fs.wgsl?raw';
 import clusteredDeferredShadingComputeRaw from './clustered_deferred_shading.cs.wgsl?raw';
@@ -30,6 +34,9 @@ export const constants = {
     moveLightsWorkgroupSize: 128,
 
     lightRadius: 2,
+
+    cameraNear: Camera.nearPlane,
+    cameraFar: Camera.farPlane,
 
     clusterX: 32,
     clusterY: 18,
@@ -59,6 +66,10 @@ export const naiveVertSrc: string = processShaderRaw(naiveVertRaw);
 export const naiveFragSrc: string = processShaderRaw(naiveFragRaw);
 
 export const forwardPlusFragSrc: string = processShaderRaw(forwardPlusFragRaw);
+export const depthPrepassFragSrc: string = processShaderRaw(depthPrepassFragRaw);
+export const fullscreenVertSrc: string = processShaderRaw(fullscreenVertRaw);
+export const markClustersFragSrc: string = processShaderRaw(markClustersFragRaw);
+export const compactClustersComputeSrc: string = processShaderRaw(compactClustersComputeRaw);
 
 export const clusteredDeferredFragSrc: string = processShaderRaw(clusteredDeferredFragRaw);
 export const clusteredDeferredShadingComputeSrc: string = processShaderRaw(clusteredDeferredShadingComputeRaw);

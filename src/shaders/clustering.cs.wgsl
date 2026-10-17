@@ -4,6 +4,17 @@
 @group(${bindGroup_scene}) @binding(1) var<storage, read> lightSet: LightSet;
 @group(${bindGroup_scene}) @binding(2) var<storage, read_write> clusterSet: ClusterSet;
 
+// list of clusters that have visible geometry, made by compact_clusters.cs.wgsl
+struct ActiveClusters {
+    dispatch: vec3u,
+    count: u32,
+    indices: array<u32>
+}
+@group(${bindGroup_scene}) @binding(3) var<storage, read> activeClusters: ActiveClusters;
+
+// true when the forward+ depth prepass found the active clusters
+override onlyActiveClusters = false;
+
 // ------------------------------------
 // Calculating cluster bounds:
 // ------------------------------------
@@ -32,9 +43,13 @@ var<workgroup> tileLights: array<vec3f, ${clusteringWorkgroupSize}>;
 @compute
 @workgroup_size(${clusteringWorkgroupSize})
 fn main(@builtin(global_invocation_id) globalIdx: vec3u, @builtin(local_invocation_index) localIdx: u32) {
-    let clusterIdx = globalIdx.x;
+    var clusterIdx = globalIdx.x;
     // no early return, every thread has to help load the lights
-    let valid = clusterIdx < ${clusterX} * ${clusterY} * ${clusterZ};
+    var valid = clusterIdx < ${clusterX} * ${clusterY} * ${clusterZ};
+    if (onlyActiveClusters) {
+        valid = globalIdx.x < activeClusters.count;
+        clusterIdx = activeClusters.indices[select(0u, globalIdx.x, valid)];
+    }
 
     let x = clusterIdx % ${clusterX};
     let y = (clusterIdx / ${clusterX}) % ${clusterY};

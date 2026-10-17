@@ -38,6 +38,11 @@ fn sliceDepth(k: u32) -> f32 {
     return ${clusterNear} * pow(${clusterFar} / ${clusterNear}, f32(k - 1u) / (${clusterZ} - 1));
 }
 
+// turns a depth buffer value back into the distance along the view direction
+fn viewDepthFromDepth(depth: f32) -> f32 {
+    return ${cameraNear} * ${cameraFar} / (${cameraFar} - depth * (${cameraFar} - ${cameraNear}));
+}
+
 // fragCoord is in pixels (y goes down), viewDepth is positive
 fn clusterIndex(fragCoord: vec2f, viewDepth: f32, screenSize: vec2f) -> u32 {
     let uv = vec2f(fragCoord.x, screenSize.y - fragCoord.y) / screenSize;
